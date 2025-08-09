@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Thumb Dodge — Neon (PWA)</title>
+<style>
+  :root{
+    --bg:#05060a; --fg:#e8f6ff; --muted:#a8c7ff;
+    --cyan:#00e5ff; --mag:#ff00e5; --lime:#00ff95; --amber:#ffc400; --red:#ff4d6d;
+  }
+  html,body{ margin:0; padding:0; height:100%;
+    background: radial-gradient(1200px 800px at 50% -20%, #0b1030 0%, #05060a 55%, #000 100%);
+    color:var(--fg); -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, Roboto, Arial, sans-serif;
+  }
+  #wrap{ position:fixed; inset:0; display:flex; flex-direction:column; }
+  header{ display:flex; align-items:center; justify-content:space-between;
+    padding:12px 16px; padding-top: calc(env(safe-area-inset-top, 0) + 8px); font-weight:700; letter-spacing:.3px; }
+  .pill{ border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.04);
+        padding:8px 12px; border-radius:14px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .score{ font-variant-numeric: tabular-nums; }
+  #powerRow{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .pbadge{ font-size:12px; padding:4px 8px; border-radius:999px; font-weight:800; }
+  .p-shield{ color:var(--lime); border:1px solid rgba(0,255,149,.4); background: rgba(0,255,149,.08); }
+  .p-slow{ color:var(--cyan); border:1px solid rgba(0,229,255,.4); background: rgba(0,229,255,.08); }
+  .p-boost{ color:var(--amber); border:1px solid rgba(255,196,0,.4); background: rgba(255,196,0,.08); }
+  #canvas{ flex:1; display:block; width:100%; height:100%; touch-action: none; }
+  #touchbar{ position:relative; height: 28vh; min-height: 160px; border-top:1px solid rgba(255,255,255,.10);
+    background: linear-gradient(180deg, rgba(0,229,255,.06), rgba(255,0,229,.04)); box-shadow: inset 0 10px 40px rgba(0,0,0,.35);
+    touch-action: none; }
+  #hint{ position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:var(--muted); opacity:.85; font-size:14px; user-select:none; pointer-events:none; }
+  #overlay{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:10; }
+  .card{ text-align:center; padding:22px 18px; border-radius:16px; border:1px solid rgba(255,255,255,.16);
+         background: rgba(8,10,18,.9); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); max-width: 92vw; }
+  h1{ margin:0 0 8px 0; font-size:26px; letter-spacing:.2px; }
+  p{ margin:8px 0; color:var(--muted); }
+  .actions{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:10px; }
+  .action{ border:0; padding:12px 16px; border-radius:12px; font-weight:800; cursor:pointer; }
+  .primary{ background: linear-gradient(90deg, var(--mag), var(--cyan)); color:#051018; }
+  .ghost{ background: rgba(255,255,255,.06); color:var(--fg); border:1px solid rgba(255,255,255,.10); }
+  .tiny{ font-size:12px; opacity:.85; }
+  .tapany{ margin-top:8px; font-size:12px; color:#fff; opacity:.9; background: rgba(255,255,255,.06); padding:8px 10px; border-radius:10px; }
+  [hidden]{ display:none !important; }
+</style>
+</head>
+<body>
+  <div id="wrap">
+    <header>
+      <div class="pill score" id="score">Score 0</div>
+      <div id="powerRow"></div>
+      <button class="pill action ghost" id="pauseBtn" aria-label="Pause">Pause</button>
+    </header>
+    <canvas id="canvas" aria-label="Gameplay area" role="img"></canvas>
+    <div id="touchbar" aria-label="Thumb control area">
+      <div id="hint">Slide your thumb left/right here</div>
+    </div>
+    <div id="overlay">
+      <div class="card" id="menuCard">
+        <h1>Thumb Dodge — Neon (PWA)</h1>
+        <p>Dodge the neon blocks. Keep your dot alive.<br/>Power‑ups: <b style="color:var(--lime)">Shield</b>, <b style="color:var(--cyan)">Slow‑Mo</b>, <b style="color:var(--amber)">2× Score</b>.</p>
+        <p class="tiny">Drag in the bottom zone to move. Tap left/right anywhere for small nudges.</p>
+        <div style="margin-top:6px;color:var(--muted); font-variant-numeric: tabular-nums;">Best <span id="best">0</span></div>
+        <div class="actions">
+          <button id="startBtn" class="action primary">Start</button>
+          <button id="muteBtn" class="action ghost">Sound On</button>
+        </div>
+        <div class="tapany">Tip: If buttons don’t respond in an in‑app browser, tap anywhere on this card to start.</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+// Register service worker
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js');
+  });
+}
+(() => {
+  const DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d', { alpha:false, desynchronized:true });
+  const scoreEl = document.getElementById('score');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const muteBtn = document.getElementById('muteBtn');
+  const bestEl = document.getElementById('best');
+  const touchbar = document.getElementById('touchbar');
+  const hint = document.getElementById('hint');
+  const powerRow = document.getElementById('powerRow');
+  const menuCard = document.getElementById('menuCard');
+  let W=0,H=0;
+  let running=false, paused=false;
+  let tLast=0;
+  let score=0, best=Number(localStorage.getItem('thumb_dodge_best_neon_pwa')||0);
+  bestEl.textContent = best;
+
+  // Audio
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audio, soundOn = true, audioUnlocked=false;
+  function unlockAudio(){
+    if(audioUnlocked) return;
+    try{
+      audio = new AudioCtx();
+      const o = audio.createOscillator(); const g = audio.createGain();
+      g.gain.value=0.0001; o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.02);
+      audioUnlocked = true;
+    }catch(e){ soundOn=false; updateMuteUI(); }
+  }
+  function beep(type='coin'){
+    if(!soundOn || !audioUnlocked || !audio) return;
+    const o = audio.createOscillator(); const g = audio.createGain();
+    o.connect(g).connect(audio.destination);
+    let f=660, dur=0.06, wave='sine';
+    if(type==='hit'){ f=120; dur=0.25; wave='square'; }
+    if(type==='coin'){ f=880; dur=0.07; wave='triangle'; }
+    if(type==='power'){ f=520; dur=0.15; wave='sawtooth'; }
+    o.type = wave; o.frequency.setValueAtTime(f, audio.currentTime);
+    g.gain.setValueAtTime(0.14, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + dur);
+    o.start(); o.stop(audio.currentTime + dur);
+  }
+  function updateMuteUI(){ muteBtn.textContent = soundOn ? 'Sound On' : 'Sound Off'; }
+
+  // World
+  const player = { x:0, y:0, r: 16, vx:0 };
+  let obstacles = [];
+  let powerUps = [];
+  let spawnTimer=0, puTimer=0;
+  const spawnEvery = () => Math.max(520 - score*1.0, 160);
+  const baseSpeed = () => 0.9 + Math.min(score/400, 1.6);
+
+  // Power-ups
+  let shieldUntil = 0, slowUntil = 0, boostUntil = 0;
+  const now = () => performance.now();
+  const hasShield = () => now() < shieldUntil;
+  const hasSlow = () => now() < slowUntil;
+  const hasBoost = () => now() < boostUntil;
+
+  function resize(){
+    const rect = canvas.getBoundingClientRect();
+    const DPRc = DPR;
+    W = Math.floor(rect.width * DPRc); H = Math.floor(rect.height * DPRc);
+    canvas.width = W; canvas.height = H;
+    player.y = Math.floor(H*0.68); player.x = Math.floor(W*0.5); player.r = Math.max(14*DPRc, 12*DPRc);
+  }
+  resize();
+  addEventListener('resize', resize);
+
+  // INPUT (Pointer + touch fallback)
+  let dragging=false, dragId=null, dragX=0;
+  function barDown(e){ unlockAudio(); dragging=true; dragId=e.pointerId||'p'; dragX=e.clientX; hint.style.opacity=0; e.preventDefault(); }
+  function barMove(e){ if(!dragging || (e.pointerId||'p')!==dragId) return; const dx=(e.clientX-dragX)*DPR; dragX=e.clientX; player.vx += dx*0.9; e.preventDefault(); }
+  function barUp(e){ if((e.pointerId||'p')===dragId){ dragging=false; } e.preventDefault(); }
+  touchbar.addEventListener('pointerdown', barDown);
+  touchbar.addEventListener('pointermove', barMove);
+  touchbar.addEventListener('pointerup', barUp);
+  touchbar.addEventListener('pointercancel', barUp);
+  touchbar.addEventListener('touchstart', (e)=>{ const t=e.changedTouches[0]; if(!t) return; dragging=true; dragId='t'; dragX=t.clientX; hint.style.opacity=0; e.preventDefault(); }, {passive:false});
+  touchbar.addEventListener('touchmove', (e)=>{ if(!dragging) return; const t=e.changedTouches[0]; if(!t) return; const dx=(t.clientX-dragX)*DPR; dragX=t.clientX; player.vx += dx*0.9; e.preventDefault(); }, {passive:false});
+  touchbar.addEventListener('touchend', (e)=>{ dragging=false; e.preventDefault(); }, {passive:false});
+
+  canvas.addEventListener('pointerdown', (e)=>{ const half=(e.clientX < window.innerWidth*0.5)?-1:1; player.vx += half*22*DPR; beep('coin'); });
+  canvas.addEventListener('touchstart', (e)=>{ const t=e.changedTouches[0]; if(!t) return; const half=(t.clientX < window.innerWidth*0.5)?-1:1; player.vx += half*22*DPR; beep('coin'); e.preventDefault(); }, {passive:false});
+
+  function bindButton(btn, handler){
+    btn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); handler(); });
+    btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); handler(); }, {passive:false});
+    btn.addEventListener('click', (e)=>{ e.preventDefault(); handler(); });
+  }
+  bindButton(pauseBtn, ()=>{ if(!running) return; paused=!paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; if(!paused){ requestAnimationFrame(loop); } });
+  bindButton(startBtn, ()=>{ start(); });
+  bindButton(muteBtn, ()=>{ soundOn=!soundOn; updateMuteUI(); });
+
+  menuCard.addEventListener('pointerdown', (e)=>{ const isButton = e.target.closest('button'); if(isButton) return; start(); });
+
+  function setMenuVisible(v){ overlay.hidden = !v; }
+
+  // Game flow
+  function start(){
+    unlockAudio();
+    running=true; paused=false; setMenuVisible(false);
+    pauseBtn.textContent = 'Pause';
+    obstacles.length=0; powerUps.length=0;
+    player.x = Math.floor(W*0.5); player.vx = 0;
+    score=0; spawnTimer=0; puTimer=2000;
+    shieldUntil = slowUntil = boostUntil = 0;
+    tLast = performance.now();
+    requestAnimationFrame(loop);
+    renderPowerRow();
+  }
+  function end(){
+    running=false; setMenuVisible(true);
+    const old = menuCard.querySelector('p._final'); if(old) old.remove();
+    const msg = document.createElement('p'); msg.className='_final'; msg.style.color='var(--red)';
+    msg.textContent = 'Game over — you scored ' + Math.floor(score);
+    menuCard.insertBefore(msg, menuCard.querySelector('.actions'));
+    if(score > best){ best = Math.floor(score); localStorage.setItem('thumb_dodge_best_neon_pwa', String(best)); bestEl.textContent = best; }
+  }
+
+  function spawnObstacle(){
+    const cols=6, margin=Math.floor(W*0.06), colW=(W - margin*2)/cols;
+    const gapCol=Math.floor(Math.random()*cols);
+    const blocks=[];
+    for(let c=0;c<cols;c++){ if(c===gapCol) continue; const x=Math.floor(margin + c*colW); const w=Math.floor(colW - 6*DPR); blocks.push({x, y:-40*DPR, w, h:22*DPR}); }
+    let vy=(2.0 + Math.random()*0.7) * DPR * baseSpeed(); if(hasSlow()) vy*=0.55;
+    obstacles.push({blocks, vy});
+  }
+  function spawnPowerUp(){
+    const types=['S','T','B']; const type=types[Math.floor(Math.random()*types.length)];
+    const x=Math.floor(20*DPR + Math.random()*(W-40*DPR)); const y=-20*DPR; const vy=(1.6 + Math.random()*0.5) * DPR;
+    powerUps.push({type, x, y, r:12*DPR, vy});
+  }
+
+  function physics(dt){
+    player.x += player.vx * dt * 0.016; player.vx *= 0.88;
+    const margin=20*DPR; if(player.x < margin){ player.x=margin; player.vx=0; } if(player.x > W - margin){ player.x=W - margin; player.vx=0; }
+    for(const row of obstacles){ row.blocks.forEach(b => b.y += row.vy); }
+    obstacles = obstacles.filter(row => { const alive=row.blocks.length && row.blocks[0].y < H + 40*DPR; if(!alive) score += hasBoost()?2:1; return alive; });
+    for(const p of powerUps){ p.y += p.vy * (hasSlow()?0.7:1); }
+    powerUps = powerUps.filter(p => p.y < H + 30*DPR);
+    for(let i=powerUps.length-1;i>=0;i--){
+      const p=powerUps[i];
+      if(circleHit(player.x, player.y, player.r*1.05, p.x, p.y, p.r)){
+        powerUps.splice(i,1);
+        if(p.type==='S'){ shieldUntil = performance.now() + 6000; }
+        if(p.type==='T'){ slowUntil = performance.now() + 5000; }
+        if(p.type==='B'){ boostUntil = performance.now() + 7000; }
+        renderPowerRow(); beep('power');
+      }
+    }
+  }
+  function collide(){
+    for(const row of obstacles){
+      for(const b of row.blocks){
+        if(circleRectHit(player.x, player.y, player.r, b.x, b.y, b.w, b.h)){
+          if(hasShield()){ shieldUntil = performance.now(); renderPowerRow(); beep('power'); return false; }
+          else{ beep('hit'); return true; }
+        }
+      }
+    }
+    return false;
+  }
+
+  function draw(){
+    ctx.fillStyle = '#05060a'; ctx.fillRect(0,0,W,H);
+    ctx.save(); ctx.globalAlpha = 0.07; ctx.strokeStyle = '#7aa8ff'; ctx.lineWidth = 1*DPR;
+    const step = 24*DPR; ctx.beginPath(); for(let y=0;y<H;y+=step){ ctx.moveTo(0,y); ctx.lineTo(W,y); } for(let x=0;x<W;x+=step){ ctx.moveTo(x,0); ctx.lineTo(x,H); } ctx.stroke(); ctx.restore();
+    glowCircle(player.x, player.y, player.r*1.7, 'rgba(0,229,255,.16)');
+    ctx.save(); ctx.fillStyle = '#00e5ff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 12*DPR;
+    ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI*2); ctx.fill(); ctx.restore();
+    ctx.save(); ctx.fillStyle = '#ff00e5'; ctx.shadowColor = '#ff00e5'; ctx.shadowBlur = 10*DPR;
+    for(const row of obstacles){ for(const b of row.blocks){ roundRect(ctx, b.x, b.y, b.w, b.h, 6*DPR); } } ctx.restore();
+    for(const p of powerUps){ drawPower(p); }
+    ctx.save(); ctx.globalAlpha = 0.12; ctx.strokeStyle = '#e8f6ff'; ctx.beginPath(); ctx.moveTo(0, player.y + player.r + 6*DPR); ctx.lineTo(W, player.y + player.r + 6*DPR); ctx.stroke(); ctx.restore();
+  }
+  function drawPower(p){
+    if(p.type==='S'){ neonRing(p.x,p.y,p.r,'#00ff95'); }
+    if(p.type==='T'){ neonDiamond(p.x,p.y,p.r*1.1,'#00e5ff'); }
+    if(p.type==='B'){ neonStar(p.x,p.y,p.r*1.15,'#ffc400'); }
+  }
+  function glowCircle(x,y,r,color){ ctx.save(); ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); ctx.restore(); }
+  function neonRing(x,y,r,color){ ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 3*DPR; ctx.shadowColor = color; ctx.shadowBlur = 12*DPR; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.stroke(); ctx.restore(); }
+  function neonDiamond(x,y,r,color){ ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 3*DPR; ctx.shadowColor = color; ctx.shadowBlur = 12*DPR; ctx.beginPath(); ctx.moveTo(x,y-r); ctx.lineTo(x+r,y); ctx.lineTo(x,y+r); ctx.lineTo(x-r,y); ctx.closePath(); ctx.stroke(); ctx.restore(); }
+  function neonStar(x,y,r,color){ ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 3*DPR; ctx.shadowColor = color; ctx.shadowBlur = 12*DPR; ctx.beginPath();
+    for(let i=0;i<10;i++){ const ang = (Math.PI*2*i)/10; const rr = i%2===0 ? r : r*0.52; const px = x + Math.cos(ang)*rr; const py = y + Math.sin(ang)*rr; if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); }
+    ctx.closePath(); ctx.stroke(); ctx.restore(); }
+  function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h); ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+    ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.fill(); }
+  function circleHit(x1,y1,r1,x2,y2,r2){ const dx=x1-x2, dy=y1-y2; return (dx*dx + dy*dy) <= (r1+r2)*(r1+r2); }
+  function circleRectHit(cx, cy, cr, rx, ry, rw, rh){ const nx = Math.max(rx, Math.min(cx, rx+rw)); const ny = Math.max(ry, Math.min(cy, ry+rh)); const dx = cx - nx, dy = cy - ny; return (dx*dx + dy*dy) <= (cr*cr); }
+  function renderPowerRow(){
+    powerRow.innerHTML = '';
+    const t = (ms)=>Math.max(0, Math.ceil(ms/1000));
+    if(hasShield()){ addBadge('Shield','p-shield', t(shieldUntil-now())); }
+    if(hasSlow()){ addBadge('Slow‑Mo','p-slow', t(slowUntil-now())); }
+    if(hasBoost()){ addBadge('2× Score','p-boost', t(boostUntil-now())); }
+  }
+  function addBadge(label, cls, sec){ const el = document.createElement('div'); el.className = 'pill pbadge ' + cls; el.textContent = label + (sec?(' '+sec+'s'):''); powerRow.appendChild(el); }
+
+  function loop(ts){
+    if(!running || paused) return;
+    const dt = Math.min(33, ts - tLast); tLast = ts;
+    spawnTimer += dt; puTimer += dt;
+    if(spawnTimer > spawnEvery()){ spawnTimer = 0; spawnObstacle(); }
+    if(puTimer > 2200 + Math.random()*1800){ puTimer = 0; if(Math.random() < 0.78) spawnPowerUp(); }
+    physics(dt/16); draw();
+    if(collide()){ end(); return; }
+    const mult = hasBoost()? 2 : 1;
+    score += 0.015 * (1 + Math.min(score/300, 1.2)) * mult;
+    scoreEl.textContent = 'Score ' + Math.floor(score);
+    if(Math.floor(ts/500)%1===0){ renderPowerRow(); }
+    requestAnimationFrame(loop);
+  }
+
+  setMenuVisible(true);
+  updateMuteUI();
+  function setMenuVisible(v){ overlay.hidden = !v; }
+})();
+</script>
+</body>
+</html>
