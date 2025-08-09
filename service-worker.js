@@ -1,6 +1,6 @@
 
 // Simple cache-first service worker for offline play
-const CACHE = 'thumb-dodge-v1';
+const CACHE = 'thumb-dodge-v2';
 const ASSETS = [
   './',
   './index.html',
