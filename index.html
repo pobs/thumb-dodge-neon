@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-192.png">
-<title>Thumb Dodge — Neon (PWA)</title>
+<title>Thumb Dodge — Neon (Tuned)</title>
 <style>
   :root{
     --bg:#05060a; --fg:#e8f6ff; --muted:#a8c7ff;
@@ -44,7 +44,6 @@
   .primary{ background: linear-gradient(90deg, var(--mag), var(--cyan)); color:#051018; }
   .ghost{ background: rgba(255,255,255,.06); color:var(--fg); border:1px solid rgba(255,255,255,.10); }
   .tiny{ font-size:12px; opacity:.85; }
-  .tapany{ margin-top:8px; font-size:12px; color:#fff; opacity:.9; background: rgba(255,255,255,.06); padding:8px 10px; border-radius:10px; }
   [hidden]{ display:none !important; }
 </style>
 </head>
@@ -61,28 +60,35 @@
     </div>
     <div id="overlay">
       <div class="card" id="menuCard">
-        <h1>Thumb Dodge — Neon (PWA)</h1>
-        <p>Dodge the neon blocks. Keep your dot alive.<br/>Power‑ups: <b style="color:var(--lime)">Shield</b>, <b style="color:var(--cyan)">Slow‑Mo</b>, <b style="color:var(--amber)">2× Score</b>.</p>
+        <h1>Thumb Dodge — Neon</h1>
+        <p>Now with higher thumb sensitivity. If it feels too fast/slow, tap “Sensitivity +/–”.</p>
+        <div style="display:flex;gap:8px;justify-content:center;margin-top:8px">
+          <button id="sensMinus" class="action ghost">Sensitivity –</button>
+          <button id="sensPlus" class="action ghost">Sensitivity +</button>
+        </div>
         <p class="tiny">Drag in the bottom zone to move. Tap left/right anywhere for small nudges.</p>
         <div style="margin-top:6px;color:var(--muted); font-variant-numeric: tabular-nums;">Best <span id="best">0</span></div>
         <div class="actions">
           <button id="startBtn" class="action primary">Start</button>
           <button id="muteBtn" class="action ghost">Sound On</button>
         </div>
-        <div class="tapany">Tip: If buttons don’t respond in an in‑app browser, tap anywhere on this card to start.</div>
       </div>
     </div>
   </div>
 
 <script>
-// Register service worker
+// Register service worker (safe on Pages)
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js');
-  });
+  window.addEventListener('load', () => { navigator.serviceWorker.register('./service-worker.js'); });
 }
 (() => {
+  // === Tunables ===
   const DPR = Math.min(window.devicePixelRatio || 1, 2);
+  let SENS_DRAG = 2.2;   // was ~0.9
+  let SENS_TAP  = 46;    // nudges per tap (scaled by DPR)
+  let FRICTION  = 0.93;  // was ~0.88 (higher = more glide)
+  // You can tweak live via the menu buttons.
+
   const canvas = document.getElementById('canvas');
   const ctx = canvas.getContext('2d', { alpha:false, desynchronized:true });
   const scoreEl = document.getElementById('score');
@@ -95,10 +101,13 @@ if ('serviceWorker' in navigator) {
   const hint = document.getElementById('hint');
   const powerRow = document.getElementById('powerRow');
   const menuCard = document.getElementById('menuCard');
+  const sensPlus = document.getElementById('sensPlus');
+  const sensMinus = document.getElementById('sensMinus');
+
   let W=0,H=0;
   let running=false, paused=false;
   let tLast=0;
-  let score=0, best=Number(localStorage.getItem('thumb_dodge_best_neon_pwa')||0);
+  let score=0, best=Number(localStorage.getItem('thumb_dodge_best_neon_tuned')||0);
   bestEl.textContent = best;
 
   // Audio
@@ -133,10 +142,11 @@ if ('serviceWorker' in navigator) {
   let obstacles = [];
   let powerUps = [];
   let spawnTimer=0, puTimer=0;
-  const spawnEvery = () => Math.max(520 - score*1.0, 160);
-  const baseSpeed = () => 0.9 + Math.min(score/400, 1.6);
+  // Keep the easier start; slightly slower base
+  const spawnEvery = () => Math.max(540 - score*0.9, 170);
+  const baseSpeed = () => 0.85 + Math.min(score/420, 1.3);
 
-  // Power-ups
+  // Power-ups (unchanged visuals; logic kept for compatibility)
   let shieldUntil = 0, slowUntil = 0, boostUntil = 0;
   const now = () => performance.now();
   const hasShield = () => now() < shieldUntil;
@@ -156,19 +166,20 @@ if ('serviceWorker' in navigator) {
   // INPUT (Pointer + touch fallback)
   let dragging=false, dragId=null, dragX=0;
   function barDown(e){ unlockAudio(); dragging=true; dragId=e.pointerId||'p'; dragX=e.clientX; hint.style.opacity=0; e.preventDefault(); }
-  function barMove(e){ if(!dragging || (e.pointerId||'p')!==dragId) return; const dx=(e.clientX-dragX)*DPR; dragX=e.clientX; player.vx += dx*0.9; e.preventDefault(); }
+  function barMove(e){ if(!dragging || (e.pointerId||'p')!==dragId) return; const dx=(e.clientX-dragX)*DPR; dragX=e.clientX; player.vx += dx*SENS_DRAG; e.preventDefault(); }
   function barUp(e){ if((e.pointerId||'p')===dragId){ dragging=false; } e.preventDefault(); }
   touchbar.addEventListener('pointerdown', barDown);
   touchbar.addEventListener('pointermove', barMove);
   touchbar.addEventListener('pointerup', barUp);
   touchbar.addEventListener('pointercancel', barUp);
   touchbar.addEventListener('touchstart', (e)=>{ const t=e.changedTouches[0]; if(!t) return; dragging=true; dragId='t'; dragX=t.clientX; hint.style.opacity=0; e.preventDefault(); }, {passive:false});
-  touchbar.addEventListener('touchmove', (e)=>{ if(!dragging) return; const t=e.changedTouches[0]; if(!t) return; const dx=(t.clientX-dragX)*DPR; dragX=t.clientX; player.vx += dx*0.9; e.preventDefault(); }, {passive:false});
+  touchbar.addEventListener('touchmove', (e)=>{ if(!dragging) return; const t=e.changedTouches[0]; if(!t) return; const dx=(t.clientX-dragX)*DPR; dragX=t.clientX; player.vx += dx*SENS_DRAG; e.preventDefault(); }, {passive:false});
   touchbar.addEventListener('touchend', (e)=>{ dragging=false; e.preventDefault(); }, {passive:false});
 
-  canvas.addEventListener('pointerdown', (e)=>{ const half=(e.clientX < window.innerWidth*0.5)?-1:1; player.vx += half*22*DPR; beep('coin'); });
-  canvas.addEventListener('touchstart', (e)=>{ const t=e.changedTouches[0]; if(!t) return; const half=(t.clientX < window.innerWidth*0.5)?-1:1; player.vx += half*22*DPR; beep('coin'); e.preventDefault(); }, {passive:false});
+  canvas.addEventListener('pointerdown', (e)=>{ const half=(e.clientX < window.innerWidth*0.5)?-1:1; player.vx += half*SENS_TAP*DPR; beep('coin'); });
+  canvas.addEventListener('touchstart', (e)=>{ const t=e.changedTouches[0]; if(!t) return; const half=(t.clientX < window.innerWidth*0.5)?-1:1; player.vx += half*SENS_TAP*DPR; beep('coin'); e.preventDefault(); }, {passive:false});
 
+  // Buttons
   function bindButton(btn, handler){
     btn.addEventListener('pointerdown', (e)=>{ e.preventDefault(); handler(); });
     btn.addEventListener('touchstart', (e)=>{ e.preventDefault(); handler(); }, {passive:false});
@@ -177,8 +188,13 @@ if ('serviceWorker' in navigator) {
   bindButton(pauseBtn, ()=>{ if(!running) return; paused=!paused; pauseBtn.textContent = paused ? 'Resume' : 'Pause'; if(!paused){ requestAnimationFrame(loop); } });
   bindButton(startBtn, ()=>{ start(); });
   bindButton(muteBtn, ()=>{ soundOn=!soundOn; updateMuteUI(); });
+  bindButton(sensPlus, ()=>{ SENS_DRAG = +(SENS_DRAG + 0.4).toFixed(2); SENS_TAP = Math.round(SENS_TAP + 6); flashHint(); });
+  bindButton(sensMinus, ()=>{ SENS_DRAG = Math.max(0.8, +(SENS_DRAG - 0.4).toFixed(2)); SENS_TAP = Math.max(18, Math.round(SENS_TAP - 6)); flashHint(); });
 
-  menuCard.addEventListener('pointerdown', (e)=>{ const isButton = e.target.closest('button'); if(isButton) return; start(); });
+  function flashHint(){
+    const msg = `Sensitivity — drag:${SENS_DRAG.toFixed(1)} tap:${SENS_TAP}`;
+    hint.textContent = msg; hint.style.opacity = 1; setTimeout(()=>{ hint.style.opacity = 0; hint.textContent='Slide your thumb left/right here'; }, 1500);
+  }
 
   function setMenuVisible(v){ overlay.hidden = !v; }
 
@@ -201,7 +217,7 @@ if ('serviceWorker' in navigator) {
     const msg = document.createElement('p'); msg.className='_final'; msg.style.color='var(--red)';
     msg.textContent = 'Game over — you scored ' + Math.floor(score);
     menuCard.insertBefore(msg, menuCard.querySelector('.actions'));
-    if(score > best){ best = Math.floor(score); localStorage.setItem('thumb_dodge_best_neon_pwa', String(best)); bestEl.textContent = best; }
+    if(score > best){ best = Math.floor(score); localStorage.setItem('thumb_dodge_best_neon_tuned', String(best)); bestEl.textContent = best; }
   }
 
   function spawnObstacle(){
@@ -219,7 +235,8 @@ if ('serviceWorker' in navigator) {
   }
 
   function physics(dt){
-    player.x += player.vx * dt * 0.016; player.vx *= 0.88;
+    player.x += player.vx * dt * 0.016;
+    player.vx *= FRICTION;
     const margin=20*DPR; if(player.x < margin){ player.x=margin; player.vx=0; } if(player.x > W - margin){ player.x=W - margin; player.vx=0; }
     for(const row of obstacles){ row.blocks.forEach(b => b.y += row.vy); }
     obstacles = obstacles.filter(row => { const alive=row.blocks.length && row.blocks[0].y < H + 40*DPR; if(!alive) score += hasBoost()?2:1; return alive; });
@@ -296,7 +313,6 @@ if ('serviceWorker' in navigator) {
     const mult = hasBoost()? 2 : 1;
     score += 0.015 * (1 + Math.min(score/300, 1.2)) * mult;
     scoreEl.textContent = 'Score ' + Math.floor(score);
-    if(Math.floor(ts/500)%1===0){ renderPowerRow(); }
     requestAnimationFrame(loop);
   }
 
